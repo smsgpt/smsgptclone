@@ -21,7 +21,8 @@ TELERIVET_API_KEY = os.getenv("TELERIVET_API_KEY")
 TELERIVET_PROJECT_ID = os.getenv("TELERIVET_PROJECT_ID")
 TELERIVET_PHONE_ID = os.getenv("TELERIVET_PHONE_ID")
 
-WHITELIST = os.getenv("PHONE_NUMBER")
+whitelist_str = os.getenv("WHITELIST", "")
+WHITELIST = set(whitelist_str.split(",")) if whitelist_str else set()
 TRIGGER_PREFIX = "Chat"
 
 # SMS behavior
