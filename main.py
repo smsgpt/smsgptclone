@@ -5,17 +5,15 @@ import requests
 import hashlib
 import time
 from threading import Thread, Timer
+from collections import defaultdict  # CONTEXT MEMORY
 
 app = Flask(__name__)
 
 # --- CONFIGURATION ---
 load_dotenv()
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")  # Replace with your actual key
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 MODEL_NAME = "deepseek/deepseek-r1:free"
-
-
-# Telerivet API info
 
 TELERIVET_API_KEY = os.getenv("TELERIVET_API_KEY")
 TELERIVET_PROJECT_ID = os.getenv("TELERIVET_PROJECT_ID")
@@ -36,6 +34,9 @@ REPEAT_TIMEOUT = 30   # seconds to ignore repeated messages
 send_timers = {}  # key = from_number, value = Timer object
 pending_replies = {}  # key = from_number, value = (prompt, reply)
 
+# --- CONTEXT MEMORY ---
+user_contexts = defaultdict(list)  # key = phone number, value = list of chat history
+MAX_CONTEXT_LEN = 10  # Keep recent 10 exchanges only
 
 # --- ROUTES ---
 
@@ -88,12 +89,11 @@ def incoming():
 def home():
     return "Flask GPT-SMS server is running!", 200
 
-
 # --- FUNCTIONS ---
 
 def process_prompt_with_delay(from_number, prompt):
     try:
-        reply = get_deepseek_response(prompt)
+        reply = get_deepseek_response(from_number, prompt)  # CONTEXT MEMORY
     except Exception as e:
         print(f"❗ DeepSeek error: {e}")
         reply = "⚠️ DeepSeek is currently unavailable or quota has been exceeded."
@@ -120,26 +120,39 @@ def send_pending_reply(from_number):
         send_sms(from_number, reply)
 
 
-def get_deepseek_response(prompt):
+# CONTEXT MEMORY: use full message history
+def get_deepseek_response(from_number, prompt):
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json"
     }
+
+    # Add new user prompt to memory
+    user_contexts[from_number].append({"role": "user", "content": prompt})
+
+    # Trim context if too long
+    if len(user_contexts[from_number]) > MAX_CONTEXT_LEN:
+        user_contexts[from_number] = user_contexts[from_number][-MAX_CONTEXT_LEN:]
+
     payload = {
         "model": MODEL_NAME,
-        "messages": [{"role": "user", "content": prompt}],
-        "stream": False  # Ensure streaming is disabled to avoid partial responses
+        "messages": user_contexts[from_number],
+        "stream": False
     }
 
     print("📡 Querying DeepSeek via OpenRouter...")
     response = requests.post(url, json=payload, headers=headers)
     if response.status_code == 200:
-        full_reply = response.json()['choices'][0]['message']['content'].strip()
-        if len(full_reply) > MAX_SMS_CHARS:
-            print(f"⚠️ Message too long ({len(full_reply)} chars), truncating.")
-            full_reply = full_reply[:MAX_SMS_CHARS] + "\n[...truncated]"
-        return full_reply
+        reply = response.json()['choices'][0]['message']['content'].strip()
+
+        # Add assistant reply to memory
+        user_contexts[from_number].append({"role": "assistant", "content": reply})
+
+        if len(reply) > MAX_SMS_CHARS:
+            print(f"⚠️ Message too long ({len(reply)} chars), truncating.")
+            reply = reply[:MAX_SMS_CHARS] + "\n[...truncated]"
+        return reply
     else:
         print(f"❌ Error {response.status_code}: {response.text}")
         return "⚠️ DeepSeek API error. Try again later."
