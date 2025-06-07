@@ -45,7 +45,7 @@ WHITELIST = set(whitelist_str.split(",")) if whitelist_str else set()
 TRIGGER_PREFIX = "Chat"
 
 # SMS behavior
-MAX_SMS_CHARS = 1200
+MAX_SMS_CHARS = 2400
 
 # Message deduplication
 recent_messages = {}  # key = from_number, value = (hash, timestamp)
