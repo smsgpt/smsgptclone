@@ -12,13 +12,16 @@ app = Flask(__name__)
 # --- CONFIGURATION ---
 load_dotenv()
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-MODEL_NAME = "deepseek/deepseek-r1:free"
+# HuggingFace config
+HF_TOKEN = os.getenv("HUGGINGFACE_API_KEY")
+HF_MODEL_URL = "https://api-inference.huggingface.co/models/openchat/openchat-3.5"
 
+# Telerivet config
 TELERIVET_API_KEY = os.getenv("TELERIVET_API_KEY")
 TELERIVET_PROJECT_ID = os.getenv("TELERIVET_PROJECT_ID")
 TELERIVET_PHONE_ID = os.getenv("TELERIVET_PHONE_ID")
 
+# Whitelist and trigger
 whitelist_str = os.getenv("PHONE_NUMBER", "")
 WHITELIST = set(whitelist_str.split(",")) if whitelist_str else set()
 TRIGGER_PREFIX = "Chat"
@@ -34,7 +37,7 @@ REPEAT_TIMEOUT = 30   # seconds to ignore repeated messages
 send_timers = {}  # key = from_number, value = Timer object
 pending_replies = {}  # key = from_number, value = (prompt, reply)
 
-# --- CONTEXT MEMORY ---
+# Context memory
 user_contexts = defaultdict(list)  # key = phone number, value = list of chat history
 MAX_CONTEXT_LEN = 10  # Keep recent 10 exchanges only
 
@@ -93,10 +96,10 @@ def home():
 
 def process_prompt_with_delay(from_number, prompt):
     try:
-        reply = get_deepseek_response(from_number, prompt)  # CONTEXT MEMORY
+        reply = get_huggingface_response(from_number, prompt)  # CONTEXT MEMORY
     except Exception as e:
-        print(f"❗ DeepSeek error: {e}")
-        reply = "⚠️ DeepSeek is currently unavailable or quota has been exceeded."
+        print(f"❗ HuggingFace error: {e}")
+        reply = "⚠️ HuggingFace API is currently unavailable or rate-limited."
 
     # Store the latest reply for this user
     pending_replies[from_number] = reply
@@ -120,11 +123,9 @@ def send_pending_reply(from_number):
         send_sms(from_number, reply)
 
 
-# CONTEXT MEMORY: use full message history
-def get_deepseek_response(from_number, prompt):
-    url = "https://openrouter.ai/api/v1/chat/completions"
+def get_huggingface_response(from_number, prompt):
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {HF_TOKEN}",
         "Content-Type": "application/json"
     }
 
@@ -135,16 +136,35 @@ def get_deepseek_response(from_number, prompt):
     if len(user_contexts[from_number]) > MAX_CONTEXT_LEN:
         user_contexts[from_number] = user_contexts[from_number][-MAX_CONTEXT_LEN:]
 
+    # Format conversation history into a single string
+    conversation = ""
+    for msg in user_contexts[from_number]:
+        role = msg["role"]
+        if role == "user":
+            conversation += f"User: {msg['content']}\n"
+        else:
+            conversation += f"Assistant: {msg['content']}\n"
+    conversation += "Assistant:"
+
     payload = {
-        "model": MODEL_NAME,
-        "messages": user_contexts[from_number],
-        "stream": False
+        "inputs": conversation,
+        "parameters": {
+            "temperature": 0.7,
+            "max_new_tokens": 300
+        }
     }
 
-    print("📡 Querying DeepSeek via OpenRouter...")
-    response = requests.post(url, json=payload, headers=headers)
-    if response.status_code == 200:
-        reply = response.json()['choices'][0]['message']['content'].strip()
+    print("📡 Querying HuggingFace OpenChat...")
+    r = requests.post(HF_MODEL_URL, headers=headers, json=payload)
+
+    if r.status_code == 200:
+        result = r.json()
+        if isinstance(result, list):
+            reply = result[0]['generated_text'].split("Assistant:")[-1].strip()
+        elif "generated_text" in result:
+            reply = result['generated_text'].split("Assistant:")[-1].strip()
+        else:
+            reply = str(result)
 
         # Add assistant reply to memory
         user_contexts[from_number].append({"role": "assistant", "content": reply})
@@ -154,8 +174,8 @@ def get_deepseek_response(from_number, prompt):
             reply = reply[:MAX_SMS_CHARS] + "\n[...truncated]"
         return reply
     else:
-        print(f"❌ Error {response.status_code}: {response.text}")
-        return "⚠️ DeepSeek API error. Try again later."
+        print(f"❌ HF Error {r.status_code}: {r.text}")
+        return "⚠️ HuggingFace API error. Try again later."
 
 
 def send_sms(to_number, message):
