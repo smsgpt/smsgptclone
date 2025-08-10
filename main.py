@@ -149,14 +149,11 @@ def get_deepseek_response(from_number, prompt):
         # Add assistant reply to memory
         user_contexts[from_number].append({"role": "assistant", "content": reply})
 
-        if len(reply) > MAX_SMS_CHARS:
-            print(f"⚠️ Message too long ({len(reply)} chars), truncating.")
-            reply = reply[:MAX_SMS_CHARS] + "\n[...truncated]"
         return reply
     else:
         print(f"❌ Error {response.status_code}: {response.text}")
         return "⚠️ DeepSeek API error. Try again later."
-
+        
 
 def send_sms(to_number, message):
     url = f"https://api.telerivet.com/v1/projects/{TELERIVET_PROJECT_ID}/messages/send"
